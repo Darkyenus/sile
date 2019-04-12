@@ -1,14 +1,12 @@
-return Bibliography.Style {
-  CitationStyle = Bibliography.CitationStyles.AuthorYear,
+return {
+    book = function(_ENV) return
+    andAuthors, " ", bib.year, ". ", italic(bib.title), ". ",
+    optional(transEditor, ". "), bib.address, ": ", bib.publisher, "."
+    end,
 
-  Book = function(_ENV)
-    return andAuthors, " ", year, ". ", italic(title), ". ",
-      optional(transEditor, ". "),
-      address, ": ", publisher, "."
-  end,
-
-  Article = function(_ENV)
-    return andAuthors, ". ", year, ". ", quotes(title, "."), " ", italic(journal), " ",
-      parens(volume), number, optional(":", pages)
-  end
+    article = function(_ENV) return
+    andAuthors, ". ", bib.year, ". ", quotes(bib.title, "."), " ",
+    italic(bib.journal), " ", parens(bib.volume), bib.number,
+    optional(":", bib.pages)
+    end
 }
