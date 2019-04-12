@@ -486,8 +486,12 @@ Bibliography = {
     --- Functions which return array of strings to be concatenated.
     --- Defines styles of citation marks.
     CitationStyles = {
-        AuthorYear = function(_ENV)
-            return andSurnames(3), " ", bib.year, optional(", ", cite.page)
+        AuthorYear = function(env)
+            return Bibliography.BibliographyElements.andSurnames(3), " ", env.bib.year, Bibliography.BibliographyElements.optional(", ", env.cite.page)
+        end,
+
+        NumericByAppearance = function(env)
+            return "["..env.referenceInfo.usedOrder .."]"
         end
     },
 
@@ -501,40 +505,31 @@ Bibliography = {
         return SILE.require("bibliography/bibstyles/" .. name)
     end,
 
+    buildEnv = function (cite, bib, referenceInfo)
+        local env = {}
+        env.cite = cite
+        env.bib = bib.attributes
+        env.bibType = bib.type
+        env.referenceInfo = referenceInfo
+        return env
+    end,
+
     --- Given citation key ({ "key" = <bibliography key:string>, ... additional arguments}),
     --- bibliography ({ <bibliography key> = <bib entry>, ... })
     --- and style ({ <bibliography type> = <{BibliographyElement, ...}>, ... }),
     --- produce a string which can be TeX-like typeset to get a citation mark
-    produceCitation = function(cite, bib, citationStyle)
-        local item = bib[cite.key]
-        if not item then
-            return Bibliography.Errors.UNKNOWN_REFERENCE
-        end
-
+    produceCitation = function(cite, bibItem, citationStyle, referenceInfo)
         -- Capture multiple return values into a table
-        local citationElements = { citationStyle(Bibliography.buildEnv(cite, item)) }
+        local citationElements = { citationStyle(Bibliography.buildEnv(cite, bibItem, referenceInfo)) }
         return Bibliography._process(item.attributes, citationElements)
-    end,
-
-    buildEnv = function (cite, bib)
-        local env = std.table.clone(_ENV)
-        env.cite = cite
-        env.bib = bib.attributes
-        env.bibType = bib.type
-        return std.table.merge(env, Bibliography.BibliographyElements)
     end,
 
     --- Given citation key ({ "key" = <bibliography key:string>, ... additional arguments}),
     --- bibliography ({ <bibliography key> = <bib entry>, ... })
     --- and style ({ <bibliography type> = <{BibliographyElement, ...}>, ... }),
     --- produce a string which can be TeX-like typeset to get a reference
-    produceReference = function(cite, bib, style)
-        local item = bib[cite.key]
-        if not item then
-            return Bibliography.Errors.UNKNOWN_REFERENCE
-        end
-
-        local originalStyleName = textcase.lowercase(item.type)
+    produceReference = function(cite, bibItem, style, referenceInfo)
+        local originalStyleName = textcase.lowercase(bibItem.type)
 
         local triedStyles = {}
         local styleName = originalStyleName
@@ -554,14 +549,10 @@ Bibliography = {
             styleName = entry and entry.fallback or "misc"
         end
 
-        if foundTypeStyle == nil then
-            return Bibliography.Errors.UNKNOWN_TYPE
-        end
-
         -- Capture multiple return values into a table
-        local env = Bibliography.buildEnv(cite, item)
+        local env = Bibliography.buildEnv(cite, bibItem, referenceInfo)
         local referenceElements = { foundTypeStyle(env) }
-        return Bibliography._process(item.attributes, referenceElements)
+        return Bibliography._process(bibItem.attributes, referenceElements)
     end,
 
     _process = function(bib, t, dStart, dEnd)
@@ -579,11 +570,6 @@ Bibliography = {
             return res
         end
     end,
-
-    Errors = {
-        UNKNOWN_REFERENCE = 1,
-        UNKNOWN_TYPE = 2
-    },
 
     -- Collection of functions (or functions which return functions) to be used when constructing
     -- a bibliographic citation string. The functions will be fed with bibliography item and options passed when citing (e.g. page, but this is not defined)
@@ -1106,8 +1092,15 @@ Bibliography.Utils.url = Bibliography.Utils.makeSurround("\\url{", "}")
 --  .bib = Loaded bibliography/ies
 --  .bibstyle = Current style for references (bibliographic citations)
 --  .citationstyle = Current style for citations (short marks which reference bibliographic citations)
+--  .references = All citations that were made with \cite in this document
+--  .referencesCount = Amount of references in .references. Used for references[].usedOrder
 
-SILE.scratch.bibtex = { bib = {}, bibstyle = {} }
+SILE.scratch.bibtex = { bib = {}, bibstyle = {}, references = {
+    -- <key> = {
+    --      usedOrder = <order in which this was first used>,
+    --      referencePending = <whether this was cited since it was last used as a reference>
+    -- }
+}, referencesCount = 1 }
 
 SILE.registerCommand("bibstyle", function(o, c)
     local ref = o.reference or c -- backward compatibility
@@ -1170,21 +1163,34 @@ end)
 
 SILE.registerCommand("cite", function(o, c)
     o.key = o.key or c[1]
-    local cite = Bibliography.produceCitation(o, SILE.scratch.bibtex.bib, SILE.scratch.bibtex.citationstyle)
-    if cite == Bibliography.Errors.UNKNOWN_REFERENCE then
-        SU.warn("Unknown reference in citation " .. o)
+
+    local bibItem = SILE.scratch.bibtex.bib[o.key]
+    if bibItem == nil then
+        SU.warn("Unknown key in citation: " .. o)
         return
     end
+
+    local reference = SILE.scratch.bibtex.references[o.key]
+    if reference == nil then
+        reference = { usedOrder = SILE.scratch.bibtex.referencesCount }
+        SILE.scratch.bibtex.referencesCount = SILE.scratch.bibtex.referencesCount + 1
+        SILE.scratch.bibtex.references[o.key] = reference
+    end
+    reference.referencePending = true
+
+    local cite = Bibliography.produceCitation(o, bibItem, SILE.scratch.bibtex.citationstyle, reference)
     SILE.doTexlike(cite)
 end)
 
 SILE.registerCommand("reference", function(o, c)
     o.key = o.key or c[1]
-    local cite = Bibliography.produceReference(o, SILE.scratch.bibtex.bib, SILE.scratch.bibtex.bibstyle)
-    if cite == Bibliography.Errors.UNKNOWN_REFERENCE then
-        SU.warn("Unknown reference in citation " .. o)
+    local bibItem = SILE.scratch.bibtex.bib[o.key]
+    if bibItem == nil then
+        SU.warn("Unknown key in reference: " .. o)
         return
     end
+
+    local cite = Bibliography.produceReference(o, bibItem, SILE.scratch.bibtex.bibstyle, SILE.scratch.bibtex.references[o.key] or {})
     SILE.doTexlike(cite)
 end)
 

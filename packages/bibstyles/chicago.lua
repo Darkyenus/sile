@@ -1,12 +1,16 @@
+local BE = Bibliography.BibliographyElements
+
 return {
-    book = function(_ENV) return
-    andAuthors, " ", bib.year, ". ", italic(bib.title), ". ",
-    optional(transEditor, ". "), bib.address, ": ", bib.publisher, "."
+    book = function(env)
+        return
+        BE.andAuthors, " ", env.bib.year, ". ", BE.italic(env.bib.title), ". ",
+        BE.optional(BE.transEditor, ". "), env.bib.address, ": ", env.bib.publisher, "."
     end,
 
-    article = function(_ENV) return
-    andAuthors, ". ", bib.year, ". ", quotes(bib.title, "."), " ",
-    italic(bib.journal), " ", parens(bib.volume), bib.number,
-    optional(":", bib.pages)
+    article = function(env)
+        return
+        BE.andAuthors, ". ", env.bib.year, ". ", BE.quotes(env.bib.title, "."), " ",
+        BE.italic(env.bib.journal), " ", BE.parens(env.bib.volume), env.bib.number,
+        BE.optional(":", env.bib.pages)
     end
 }
