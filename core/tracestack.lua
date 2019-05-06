@@ -1,87 +1,91 @@
+local _untracable = function () return SILE.currentlyProcessingFile or "<nowhere>" end
+
+-- Helper function to identify items in stack with human readable locations
+local _formatLocation = function(self, skipFile, withAttrs)
+  local str
+  if skipFile or not self.file then
+    str = ""
+  else
+    str = self.file .. " "
+  end
+  if self.line then
+    str = str .. "l." .. self.line .. " "
+    if self.column then
+      str = str .. "col." .. self.column .. " "
+    end
+  end
+  if self.tag then
+    -- Command
+    str = str .. "\\" .. self.tag
+    if withAttrs then
+      str = str .. "["
+      local first = true
+      for key, value in pairs(self.options) do
+        if first then
+          first = false
+        else
+          str = str .. ", "
+        end
+        str = str .. key .. "=" .. value
+      end
+      str = str .. "]"
+    end
+  elseif self.text then
+    -- Literal string
+    local text = self.text
+    if text:len() > 20 then
+      text = text:sub(1, 18) .. "…"
+    end
+    text = text:gsub("\n", "␤"):gsub("\t", "␉"):gsub("\v", "␋")
+    str = str .. '"' .. text .. '"'
+  else
+    -- Unknown
+    str = str .. type(self.content) .. "(" .. self.content .. ")"
+  end
+  return str
+end
+
 -- A stack of objects which describe the call-stack of processing of the currently document
 local traceStack = {
 
-  -- Internal: Push-pop balance checking ID
-  _lastPushId = 0,
+  -- Push-pop balance checking ID
+  _lastPushedId = 0,
 
-  -- Stores the frame which was last popped. Reset after a push.
+  -- Stores whatever object was last popped. Reset after a push.
   -- Helps to further specify current location in the processed document.
-  afterFrame = nil,
+  _lastPopped = nil,
 
-  -- Internal function assigned to stack frames to convert them to human readable location
-  _getLocation = function(self, skipFile, withAttrs)
-    local str
-    if skipFile or not self.file then
-      str = ""
-    else
-      str = self.file .. " "
-    end
-    if self.line then
-      str = str .. "l." .. self.line .. " "
-      if self.column then
-        str = str .. "col." .. self.column .. " "
-      end
-    end
-    if self.tag then
-      -- Command
-      str = str .. "\\" .. self.tag
-      if withAttrs then
-        str = str .. "["
-        local first = true
-        for key, value in pairs(self.options) do
-          if first then first = false else str = str .. ", " end
-          str = str .. key .. "=" .. value
-        end
-        str = str .. "]"
-      end
-    elseif self.text then
-      -- Literal string
-      local text = self.text
-      if text:len() > 20 then
-        text = text:sub(1, 18) .. "…"
-      end
-      text = text:gsub("\n", "␤"):gsub("\t", "␉"):gsub("\v", "␋")
-
-      str = str .. "\"" .. text .. "\""
-    else
-      -- Unknown
-      str = str .. type(self.content) .. "(" .. self.content .. ")"
-    end
-    return str
-  end,
-
-  -- Internal: Given an collection of frames and an afterFrame, construct and return a human readable info string
-  -- about the location in processed document. Similar to _getLocation, but takes into account
-  -- the afterFrame and the fact, that not all frames may carry a location information.
-  _formatTraceHead = function (self, traceStack, afterFrame)
-    local top = traceStack[#traceStack]
+  -- Internal: Given an collection of frames and an _lastPopped, construct and return a human readable info string
+  -- about the location in processed document. Similar to _formatLocation, but takes into account
+  -- the _lastPopped and the fact, that not all frames may carry a location information.
+  _formatTrace = function (self)
+    local top = self[#self]
     if not top then
       -- Stack is empty, there is not much we can do
-      return afterFrame and "after " .. self:_getLocation() or nil
+      return self.lastPopped and "after " .. self.lastPopped:_formatLocation() or nil
     end
-    local info = top:_getLocation()
+    local info = top:_formatLocation()
     local locationFrame = top
     -- Not all stack traces have to carry location information.
-    -- If the top stack trace does not carry it, find a frame which does.
+    -- If the top stack trace does not carry it, find an item which does.
     -- Then append it, because its information may be useful.
     if not top.line then
-      for i = #traceStack - 1, 1, -1 do
-        if traceStack[i].line then
-          -- Found a frame which does carry some relevant information.
-          locationFrame = traceStack[i]
-          info = info .. " near " .. traceStack[i]:_getLocation(--[[skipFile=]] traceStack[i].file == top.file)
+      for i = #self - 1, 1, -1 do
+        if self[i].line then
+          locationFrame = self[i]
+          info = info .. " near " .. self[i]:_formatLocation(self[i].file == top.file)
           break
         end
       end
     end
     -- Print after, if it is in a relevant file
-    if afterFrame and (not locationFrame or afterFrame.file == locationFrame.file) then
-      info = info .. " after " .. afterFrame:_getLocation(--[[skipFile=]] true)
+    if self.lastPopped and (not locationFrame or self.lastPopped.file == locationFrame.file) then
+      info = info .. " after " .. _self.lastPopped:formatLocation(true)
     end
     return info
   end,
 
-  -- Push a command frame on to the stack to record the execution trace for debugging.
+  -- Push a command to the stack to record the execution trace for debugging.
   -- Carries information about the command call, not the command itself.
   -- Must be popped with `pop(returnOfPush)`.
   pushCommand = function(self, tag, options, file, line, column)
@@ -93,7 +97,7 @@ local traceStack = {
   end,
 
 
-  -- Push a command frame on to the stack to record the execution trace for debugging.
+  -- Push a command to the stack to record the execution trace for debugging.
   -- Command arguments are inferred from AST content, any item may be overridden.
   -- Must be popped with `pop(returnOfPush)`.
   pushContent = function(self, content, tag)
@@ -116,7 +120,6 @@ local traceStack = {
   end,
 
   _push = function (self, file, line, column, tag, options, text, toStringFunc)
-    SU.debug("commandStack", string.rep(" ", #self) .. "PUSH(" .. self:_getLocation(false, true) .. ")")
     local pushId = #self + 1
     self[pushId] = {
       file = file,
@@ -126,11 +129,12 @@ local traceStack = {
       tag = tag or "???",
       options = options or {},
       typesetter = SILE.typesetter,
-      _getLocation = toStringFunc or self._getLocation,
+      _formatLocation = toStringFunc or _formatLocation,
       pushId = pushId
     }
-    self.afterFrame = nil
-    self._lastPushId = pushId
+    SU.debug("commandStack", string.rep(" ", #self) .. "PUSH(" .. self[pushId]:_formatLocation() .. ")")
+    self._lastPopped = nil
+    self._lastPushedId = pushId
     return pushId
   end,
 
@@ -144,39 +148,33 @@ local traceStack = {
     local popped = self[#self]
     if popped.pushId ~= pushId then
       local message = "Unbalanced content push/pop"
-      local debug = SILE.traceback or SU.debugging("commandStack")
-      if debug then
-        message = message .. ". Expected " .. popped.pushId .. " - (" .. popped:_getLocation() .. "), got " .. pushId
+      if SILE.traceback or SU.debugging("commandStack") then
+        message = message .. ". Expected " .. popped.pushId .. " - (" .. popped:_formatLocation() .. "), got " .. pushId
       end
-      SU.warn(message, debug)
+      SU.warn(message, true)
     else
-      -- Correctly balanced: pop the frame
-      self.afterFrame = popped
+      self._lastPopped = popped
       self[#self] = nil
-      if SU.debugging("commandStack") then
-        SU.debug("commandStack", string.rep(" ", #self) .. "POP(" .. popped:_getLocation(false, true) .. ")")
-      end
+      SU.debug("commandStack", string.rep(" ", #self) .. "POP(" .. popped:_formatLocation(false, true) .. ")")
     end
   end,
 
   -- Returns short string with most relevant location information for user messages.
   locationInfo = function(self)
-    return self:_formatTraceHead(self.afterFrame) or SILE.currentlyProcessingFile or "<nowhere>"
+    return self:_formatTrace() or _untracable()
   end,
 
   -- Returns multiline trace string, with full document location information for user messages.
   locationTrace = function(self)
     local prefix = "  at "
-    local trace = self._formatTraceHead({ self[#self] } --[[we handle rest of the stack ourselves]], self.afterFrame)
+    local trace = self:_formatTrace()
     if not trace then
-      -- There is nothing else then
-      return prefix .. (SILE.currentlyProcessingFile or "<nowhere>") .. "\n"
+      return prefix .. _untracable() .. "\n"
     end
     trace = prefix .. trace .. "\n"
     -- Iterate backwards, skipping the last element
     for i = #self - 1, 1, -1 do
-      local s = self[i]
-      trace = trace .. prefix .. s:_getLocation() .. "\n"
+      trace = trace .. prefix .. self[i]:_formatLocation() .. "\n"
     end
     return trace
   end
