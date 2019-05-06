@@ -1,5 +1,4 @@
--- Represents a stack of frame objects, which describe the call-stack stack of
--- processing of the currently processed document.
+-- A stack of objects which describe the call-stack of processing of the currently document
 local traceStack = {
 
   -- Internal: Push-pop balance checking ID
@@ -9,8 +8,8 @@ local traceStack = {
   -- Helps to further specify current location in the processed document.
   afterFrame = nil,
 
-  -- Internal: Function assigned to stack frames to convert them to human readable location
-  _frameToLocationString = function(self, skipFile, withAttrs)
+  -- Internal function assigned to stack frames to convert them to human readable location
+  _getLocation = function(self, skipFile, withAttrs)
     local str
     if skipFile or not self.file then
       str = ""
@@ -52,15 +51,15 @@ local traceStack = {
   end,
 
   -- Internal: Given an collection of frames and an afterFrame, construct and return a human readable info string
-  -- about the location in processed document. Similar to _frameToLocationString, but takes into account
+  -- about the location in processed document. Similar to _getLocation, but takes into account
   -- the afterFrame and the fact, that not all frames may carry a location information.
-  _formatTraceHead = function (traceStack, afterFrame)
+  _formatTraceHead = function (self, traceStack, afterFrame)
     local top = traceStack[#traceStack]
     if not top then
       -- Stack is empty, there is not much we can do
-      return afterFrame and "after " .. afterFrame:toLocationString() or nil
+      return afterFrame and "after " .. self:_getLocation() or nil
     end
-    local info = top:toLocationString()
+    local info = top:_getLocation()
     local locationFrame = top
     -- Not all stack traces have to carry location information.
     -- If the top stack trace does not carry it, find a frame which does.
@@ -70,14 +69,14 @@ local traceStack = {
         if traceStack[i].line then
           -- Found a frame which does carry some relevant information.
           locationFrame = traceStack[i]
-          info = info .. " near " .. locationFrame:toLocationString(--[[skipFile=]] locationFrame.file == top.file)
+          info = info .. " near " .. traceStack[i]:_getLocation(--[[skipFile=]] traceStack[i].file == top.file)
           break
         end
       end
     end
     -- Print after, if it is in a relevant file
     if afterFrame and (not locationFrame or afterFrame.file == locationFrame.file) then
-      info = info .. " after " .. afterFrame:toLocationString(--[[skipFile=]] true)
+      info = info .. " after " .. afterFrame:_getLocation(--[[skipFile=]] true)
     end
     return info
   end,
@@ -85,65 +84,54 @@ local traceStack = {
   -- Push a command frame on to the stack to record the execution trace for debugging.
   -- Carries information about the command call, not the command itself.
   -- Must be popped with `pop(returnOfPush)`.
-  pushCommand = function(self, tag, line, column, options, file)
+  pushCommand = function(self, tag, options, file, line, column)
     if not tag then
       SU.warn("Tag should be specified for SILE.traceStack:pushCommand", true)
     end
-    return self:_pushFrame({
-        tag = tag or "???",
-        file = file or SILE.currentlyProcessingFile,
-        line = line,
-        column = column,
-        options = options or {}
-      })
+    local file = file or SILE.currentlyProcessingFile
+    return self:_push(file, line, column, tag, options)
   end,
 
 
   -- Push a command frame on to the stack to record the execution trace for debugging.
   -- Command arguments are inferred from AST content, any item may be overridden.
   -- Must be popped with `pop(returnOfPush)`.
-  pushContent = function(self, content, tag, line, column, options, file)
+  pushContent = function(self, content, tag)
+    local tag = tag or content.tag
     if type(content) ~= "table" then
       SU.warn("Content parameter of SILE.traceStack:pushContent must be a table", true)
       content = {}
     end
-    tag = tag or content.tag
     if not tag then
       SU.warn("Tag should be specified or inferable for SILE.traceStack:pushContent", true)
     end
-    return self:_pushFrame({
-        tag = tag or "???",
-        file = file or content.file or SILE.currentlyProcessingFile,
-        line = line or content.line,
-        column = column or content.col,
-        options = options or content.attr or {}
-      })
+    local file = content.file or SILE.currentlyProcessingFile
+    return self:_push(file, content.line, content.col, tag, content.attr)
   end,
 
   -- Push a text that is going to get typeset on to the stack to record the execution trace for debugging.
   -- Must be popped with `pop(returnOfPush)`.
-  pushText = function(self, text, line, column, file)
-    return self:_pushFrame({
-        text = text,
-        file = file,
-        line = line,
-        column = column
-      })
+  pushText = function(self, text)
+    return self:_push(nil, nil, nil, nil, nil, text)
   end,
 
-  -- Internal: Push complete frame
-  _pushFrame = function (self, frame)
-    frame.toLocationString = frame.toLocationString or self._frameToLocationString
-    frame.typesetter = SILE.typesetter
-    -- Push the frame
-    if SU.debugging("commandStack") then
-      print(string.rep(" ", #self) .. "PUSH(" .. frame:toLocationString(false, true) .. ")")
-    end
-    self[#self + 1] = frame
+  _push = function (self, file, line, column, tag, options, text, toStringFunc)
+    SU.debug("commandStack", string.rep(" ", #self) .. "PUSH(" .. self:_getLocation(false, true) .. ")")
+    local pushId = #self + 1
+    self[pushId] = {
+      file = file,
+      line = line,
+      column = column,
+      text = text,
+      tag = tag or "???",
+      options = options or {},
+      typesetter = SILE.typesetter,
+      _getLocation = toStringFunc or self._getLocation,
+      pushId = pushId
+    }
     self.afterFrame = nil
-    self._lastPushId = self._lastPushId + 1
-    frame.pushId = self._lastPushId
-    return self._lastPushId
+    self._lastPushId = pushId
+    return pushId
   end,
 
   -- Pop previously pushed command from the stack.
@@ -158,7 +146,7 @@ local traceStack = {
       local message = "Unbalanced content push/pop"
       local debug = SILE.traceback or SU.debugging("commandStack")
       if debug then
-        message = message .. ". Expected " .. popped.pushId .. " - (" .. popped:toLocationString() .. "), got " .. pushId
+        message = message .. ". Expected " .. popped.pushId .. " - (" .. popped:_getLocation() .. "), got " .. pushId
       end
       SU.warn(message, debug)
     else
@@ -166,7 +154,7 @@ local traceStack = {
       self.afterFrame = popped
       self[#self] = nil
       if SU.debugging("commandStack") then
-        print(string.rep(" ", #self) .. "POP(" .. popped:toLocationString(false, true) .. ")")
+        SU.debug("commandStack", string.rep(" ", #self) .. "POP(" .. popped:_getLocation(false, true) .. ")")
       end
     end
   end,
@@ -188,7 +176,7 @@ local traceStack = {
     -- Iterate backwards, skipping the last element
     for i = #self - 1, 1, -1 do
       local s = self[i]
-      trace = trace .. prefix .. s:toLocationString() .. "\n"
+      trace = trace .. prefix .. s:_getLocation() .. "\n"
     end
     return trace
   end
