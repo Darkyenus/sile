@@ -1,17 +1,16 @@
-local _untracable = function () return SILE.currentlyProcessingFile or "<nowhere>" end
+local _untraceable = function () return SILE.currentlyProcessingFile .. ":" or "<nowhere>" end
 
 -- Helper function to identify items in stack with human readable locations
 local _formatLocation = function(self, skipFile, withAttrs)
-  local str
-  if skipFile or not self.file then
-    str = ""
-  else
-    str = self.file .. " "
-  end
-  if self.line then
-    str = str .. "l." .. self.line .. " "
-    if self.column then
-      str = str .. "col." .. self.column .. " "
+  local str = ""
+  if self.file and not skipFile then
+    str = self.file .. ":"
+    if self.line then
+      str = str .. self.line .. ":"
+      if self.column then
+        str = str .. self.column .. ":"
+      end
+      str = str .. " "
     end
   end
   if self.tag then
@@ -126,7 +125,7 @@ local traceStack = {
       line = line,
       column = column,
       text = text,
-      tag = tag or "???",
+      tag = tag,
       options = options or {},
       typesetter = SILE.typesetter,
       _formatLocation = toStringFunc or _formatLocation,
@@ -161,15 +160,15 @@ local traceStack = {
 
   -- Returns short string with most relevant location information for user messages.
   locationInfo = function(self)
-    return self:_formatTrace() or _untracable()
+    return self:_formatTrace() or _untraceable()
   end,
 
   -- Returns multiline trace string, with full document location information for user messages.
   locationTrace = function(self)
-    local prefix = "  at "
-    local trace = self:_formatTrace()
+    local prefix = "\t"
+    local trace = _formatLocation(self[#self])
     if not trace then
-      return prefix .. _untracable() .. "\n"
+      return prefix .. _untraceable() .. "\n"
     end
     trace = prefix .. trace .. "\n"
     -- Iterate backwards, skipping the last element
