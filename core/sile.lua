@@ -243,19 +243,18 @@ function SILE.resolveFile(filename, pathprefix)
 end
 
 function SILE.call(command, options, content)
-  local file, line, column
-  if type(content) == "table" and content.line then
-    file, line, column = content.file, content.line, content.col
-  elseif SILE.traceback then
+  options = options or {}
+  content = content or {}
+  if not content.line and SILE.traceback then
     -- This call is from code (no content.line) and we want to spend the time
     -- to determine everything we need about the caller
     local caller = debug.getinfo(2, "Sl")
-    file, line = caller.short_src, caller.currentline
+    content.file, content.line = caller.short_src, caller.currentline
   end
-  local pId = SILE.traceStack:pushCommand(cmd, options, file, line, column)
+  local stackPushId = SILE.traceStack:push(content)
   if not SILE.Commands[command] then SU.error("Unknown command "..command) end
-  local result = SILE.Commands[command](options or {}, content or {})
-  SILE.traceStack:pop(pId)
+  local result = SILE.Commands[command](options, content)
+  SILE.traceStack:pop(stackPushId)
   return result
 end
 
