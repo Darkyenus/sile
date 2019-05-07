@@ -75,7 +75,7 @@ end
 utilities.debug = function (category, ...)
   local arg = { ... } -- Avoid things that Lua stuffs in arg like args to self()
   if utilities.debugging(category) then
-    print("["..category.."]", #arg == 1 and arg[1] or arg)
+    io.stderr:write("\n["..category.."] ", #arg == 1 and arg[1] or arg)
   end
 end
 
