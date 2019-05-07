@@ -242,7 +242,7 @@ function SILE.resolveFile(filename, pathprefix)
   return nil
 end
 
-function SILE.call(cmd, options, content)
+function SILE.call(command, options, content)
   local file, line, column
   if type(content) == "table" and content.line then
     file, line, column = content.file, content.line, content.col
@@ -253,8 +253,8 @@ function SILE.call(cmd, options, content)
     file, line = caller.short_src, caller.currentline
   end
   local pId = SILE.traceStack:pushCommand(cmd, options, file, line, column)
-  if not SILE.Commands[cmd] then SU.error("Unknown command "..cmd) end
-  local result = SILE.Commands[cmd](options or {}, content or {})
+  if not SILE.Commands[command] then SU.error("Unknown command "..command) end
+  local result = SILE.Commands[command](options or {}, content or {})
   SILE.traceStack:pop(pId)
   return result
 end
