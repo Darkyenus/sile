@@ -58,7 +58,7 @@ local traceStack = {
   -- about the location in processed document. Similar to _formatLocation, but takes into account
   -- the _lastPopped and the fact, that not all frames may carry a location information.
   _formatTrace = function (self)
-    local top = self[#self]
+    local top = self[self._lastPushedId]
     if not top then
       -- Stack is empty, there is not much we can do
       return self.lastPopped and "after " .. self.lastPopped:_formatLocation() or nil
@@ -69,7 +69,7 @@ local traceStack = {
     -- If the top stack trace does not carry it, find an item which does.
     -- Then append it, because its information may be useful.
     if not top.line then
-      for i = #self - 1, 1, -1 do
+      for i = self._lastPushedId - 1, 1, -1 do
         if self[i].line then
           locationFrame = self[i]
           info = info .. " near " .. self[i]:_formatLocation(self[i].file == top.file)
@@ -119,7 +119,7 @@ local traceStack = {
   end,
 
   _push = function (self, file, line, column, tag, options, text, toStringFunc)
-    local pushId = #self + 1
+    local pushId = self._lastPushedId + 1
     self[pushId] = {
       file = file,
       line = line,
@@ -143,18 +143,17 @@ local traceStack = {
     if type(pushId) ~= "number" then
       SU.error("SILE.traceStack:pop's argument must be the result value of the corresponding push", true)
     end
-    -- First verify that push/pop is balanced
-    local popped = self[#self]
-    if popped.pushId ~= pushId then
+    local popped = self[pushId]
+    if popped.pushId == pushId then
+      self._lastPopped = popped
+      self[pushId] = nil
+      SU.debug("commandStack", string.rep(" ", #self) .. "POP(" .. popped:_formatLocation(false, true) .. ")")
+    else
       local message = "Unbalanced content push/pop"
       if SILE.traceback or SU.debugging("commandStack") then
         message = message .. ". Expected " .. popped.pushId .. " - (" .. popped:_formatLocation() .. "), got " .. pushId
       end
       SU.warn(message, true)
-    else
-      self._lastPopped = popped
-      self[#self] = nil
-      SU.debug("commandStack", string.rep(" ", #self) .. "POP(" .. popped:_formatLocation(false, true) .. ")")
     end
   end,
 
@@ -166,14 +165,16 @@ local traceStack = {
   -- Returns multiline trace string, with full document location information for user messages.
   locationTrace = function(self)
     local prefix = "\t"
-    local trace = _formatLocation(self[#self])
+    local trace = _formatLocation(self[self._lastPushedId])
     if not trace then
       return prefix .. _untraceable() .. "\n"
     end
     trace = prefix .. trace .. "\n"
     -- Iterate backwards, skipping the last element
-    for i = #self - 1, 1, -1 do
-      trace = trace .. prefix .. self[i]:_formatLocation() .. "\n"
+    for i = self._lastPushedId - 1, 1, -1 do
+      if self[i] then
+        trace = trace .. prefix .. self[i]:_formatLocation() .. "\n"
+      end
     end
     return trace
   end

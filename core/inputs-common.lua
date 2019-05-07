@@ -62,13 +62,13 @@ SILE.process = function(input)
     elseif SILE.Commands[content.tag] then
       SILE.call(content.tag, content.attr, content)
     elseif content.id == "texlike_stuff" or (not content.tag and not content.id) then
-      local pId = SILE.traceStack:pushContent(content, "texlike_stuff")
+      local stackPushId = SILE.traceStack:pushContent(content, "texlike_stuff")
       SILE.process(content)
-      SILE.traceStack:pop(pId)
+      SILE.traceStack:pop(stackPushId)
     else
-      local pId = SILE.traceStack:pushContent(content)
+      local stackPushId = SILE.traceStack:pushContent(content)
       SU.error("Unknown command "..(content.tag or content.id))
-      SILE.traceStack:pop(pId)
+      SILE.traceStack:pop(stackPushId)
     end
   end
 end
