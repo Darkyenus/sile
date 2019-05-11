@@ -29,6 +29,7 @@ SILE.shapers.base = std.object {
       SILE.settings.temporarily(function()
         SILE.settings.set("font.size", options.size)
         SILE.settings.set("font.family", options.family)
+        if options.filename then SILE.settings.set("font.filename", options.filename) end
         ss = ss:absolute()
       end)
       return ss
