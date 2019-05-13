@@ -1,397 +1,218 @@
 local std = require("std")
+local textcase = SILE.require("packages/textcase").exports
 
--- The following functions borrowed from Norman Ramsey's nbibtex,
--- with permission.
+---------------------------
+--- Bibliography global ---
+---------------------------
+-- Public programmatic API for this package
+-- Stateless, pure in regards to other globals
 
-local function find_outside_braces(s, pat, i)
-  local len = string.len(s)
-  local j, k = string.find(s, pat, i)
-  if not j then return j, k end
-  local jb, kb = string.find(s, '%b{}', i)
-  while jb and jb < j do --- scan past braces
-    --- braces come first, so we search again after close brace
-    local i2 = kb + 1
-    j, k = string.find(s, pat, i2)
-    if not j then return j, k end
-    jb, kb = string.find(s, '%b{}', i2)
-  end
-  -- either pat precedes braces or there are no braces
-  return string.find(s, pat, j) --- 2nd call needed to get captures
-end
+Bibliography = {
+    --- Available engines, that provide citations and bibliographies
+    --- User can provide additional engines
+    --- Loaded via \loadbibliography[id=engineName]
+    Engines = {
+        --[[
+        engineName = function (options) {
+            return {
+                -- Called when the bibliography entry is first cited
+                -- Returns tex-like string, AST table, or nil if this engine doesn't know this key
+                citation = function(key, options)
+                    return <author>..""..<year>
+                end,
+                -- Called when creating bibliography for bibliography entry
+                -- Returns tex-like string, AST table, or nil if this engine doesn't know this key
+                -- Second return is an string to sort by in full bibliography
+                bibliography = function(key, options)
+                    return <author>.." "..<name>.." "..<year>
+                end
+            }
+        }
+        ]]
+    },
 
-local function split(s, pat, find) --- return list of substrings separated by pat
-  find = find or string.find -- could be find_outside_braces
-  local len = string.len(s)
-  local t = { }
-  local insert = table.insert
-  local i, j, k = 1, true
-  while j and i <= len + 1 do
-    j, k = find(s, pat, i)
-    if j then
-      insert(t, string.sub(s, i, j-1))
-      i = k + 1
-    else
-      insert(t, string.sub(s, i))
-    end
-  end
-  return t
-end
+    --- Add given engine to the pool of available engines
+    loadEngine = function(name, engine)
+        engine = engine or SILE.require("packages/bibengines/"..name)
+        Bibliography.Engines[name] = engine
+        return engine
+    end,
 
-local function splitters(s, pat, find) --- return list of separators
-  find = find or string.find -- could be find_outside_braces
-  local t = { }
-  local insert = table.insert
-  local j, k = find(s, pat, 1)
-  while j do
-    insert(t, string.sub(s, j, k))
-    j, k = find(s, pat, k+1)
-  end
-  return t
-end
+    --- Creates an engine from the engine pool, possibly loading that engine first
+    createEngine = function(name, options)
+        local constructor = Bibliography.Engines[name]
+        if constructor == nil then
+            constructor = Bibliography.loadEngine(name)
+        end
 
-local function namesplit(s)
-  local t = split(s, '%s+[aA][nN][dD]%s+', find_outside_braces)
-  local i = 2
-  while i <= #t do
-    while string.find(t[i], '^[aA][nN][dD]%s+') do
-      t[i] = string.gsub(t[i], '^[aA][nN][dD]%s+', '')
-      table.insert(t, i, '')
-      i = i + 1
-    end
-    i = i + 1
-  end
-  return t
-end
-
-local sep_and_not_tie = '%-'
-local sep_chars = sep_and_not_tie .. '%~'
-
-local parse_name
-do
-  local white_sep         = '[' .. sep_chars .. '%s]+'
-  local white_comma_sep   = '[' .. sep_chars .. '%s%,]+'
-  local trailing_commas   = '(,[' .. sep_chars .. '%s%,]*)$'
-  local sep_char          = '[' .. sep_chars .. ']'
-  local leading_white_sep = '^' .. white_sep
-
-  -- <name-parsing utilities>=
-  function isVon(s)
-    local lower  = find_outside_braces(s, '%l') -- first nonbrace lowercase
-    local letter = find_outside_braces(s, '%a') -- first nonbrace letter
-    local bs, ebs, command = find_outside_braces(s, '%{%\\(%a+)') -- \xxx
-    if lower and lower <= letter and lower <= (bs or lower) then
-      return true
-    elseif letter and letter <= (bs or letter) then
-      return false
-    elseif bs then
-      if upper_specials[command] then
-        return false
-      elseif lower_specials[command] then
-        return true
-      else
-        local close_brace = find_outside_braces(s, '%}', ebs+1)
-        lower  = find(s, '%l') -- first nonbrace lowercase
-        letter = find(s, '%a') -- first nonbrace letter
-        return lower and lower <= letter
-      end
-    else
-      return false
-    end
-  end
-
-  function parse_name(s, inter_token)
-    if string.find(s, trailing_commas) then
-      biberrorf("Name '%s' has one or more commas at the end", s)
-    end
-    s = string.gsub(s, trailing_commas, '')
-    s = string.gsub(s, leading_white_sep, '')
-    local tokens = split(s, white_comma_sep, find_outside_braces)
-    local trailers = splitters(s, white_comma_sep, find_outside_braces)
-    -- The string separating tokens is reduced to a single
-    -- ``separator character.'' A comma always trumps other
-    -- separator characters. Otherwise, if there's no comma,
-    -- we take the first character, be it a separator or a
-    -- space. (Patashnik considers that multiple such
-    -- characters constitute ``silliness'' on the user's
-    -- part.)
-    -- <rewrite [[trailers]] to hold a single separator character each>=
-    for i = 1, #trailers do
-      local s = trailers[i]
-      assert(string.len(s) > 0)
-      if string.find(s, ',') then
-        trailers[i] = ','
-      else
-        trailers[i] = string.sub(s, 1, 1)
-      end
-    end
-    local commas = { } --- maps each comma to index of token the follows it
-    for i, t in ipairs(trailers) do
-      string.gsub(t, ',', function() table.insert(commas, i+1) end)
-    end
-    local name = { }
-    -- A name has up to four parts: the most general form is
-    -- either ``First von Last, Junior'' or ``von Last,
-    -- First, Junior'', but various vons and Juniors can be
-    -- omitted. The name-parsing algorithm is baroque and is
-    -- transliterated from the original BibTeX source, but
-    -- the principle is clear: assign the full version of
-    -- each part to the four fields [[ff]], [[vv]], [[ll]],
-    -- and [[jj]]; and assign an abbreviated version of each
-    -- part to the fields [[f]], [[v]], [[l]], and [[j]].
-    -- <parse the name tokens and set fields of [[name]]>=
-    local first_start, first_lim, last_lim, von_start, von_lim, jr_lim
-      -- variables mark subsequences; if start == lim, sequence is empty
-    local n = #tokens
-    -- The von name, if any, goes from the first von token to
-    -- the last von token, except the last name is entitled
-    -- to at least one token. So to find the limit of the von
-    -- name, we start just before the last token and wind
-    -- down until we find a von token or we hit the von start
-    -- (in which latter case there is no von name).
-    -- <local parsing functions>=
-    function divide_von_from_last()
-      von_lim = last_lim - 1
-      while von_lim > von_start and not isVon(tokens[von_lim-1]) do
-        von_lim = von_lim - 1
-      end
-    end
-
-    local commacount = #commas
-    if commacount == 0 then -- first von last jr
-      von_start, first_start, last_lim, jr_lim = 1, 1, n+1, n+1
-      -- OK, here's one form.
-      --
-      -- <parse first von last jr>=
-      local got_von = false
-      while von_start < last_lim-1 do
-        if isVon(tokens[von_start]) then
-          divide_von_from_last()
-          got_von = true
-          break
+        if type(constructor) == "table" then
+            return constructor
+        elseif type(constructor) == "function" then
+            return constructor(options)
         else
-          von_start = von_start + 1
+            SU.error("Bibliography engine '"..name.."' is invalid: "..type(constructor))
         end
-      end
-      if not got_von then -- there is no von name
-        while von_start > 1 and string.find(trailers[von_start - 1], sep_and_not_tie) do
-          von_start = von_start - 1
+    end,
+
+    --- Given citation key and citing options, produce an AST
+    --- which can be typeset to get a citation mark
+    produceCitation = function(engines, key, options)
+        if #engines == 0 then
+            SU.error("Can't cite '"..key.."', no engines loaded")
         end
-        von_lim = von_start
-      end
-      first_lim = von_start
-    elseif commacount == 1 then -- von last jr, first
-      von_start, last_lim, jr_lim, first_start, first_lim =
-        1, commas[1], commas[1], commas[1], n+1
-      divide_von_from_last()
-    elseif commacount == 2 then -- von last, jr, first
-      von_start, last_lim, jr_lim, first_start, first_lim =
-        1, commas[1], commas[2], commas[2], n+1
-      divide_von_from_last()
-    else
-      biberrorf("Too many commas in name '%s'")
-    end
-    -- <set fields of name based on [[first_start]] and friends>=
-    -- We set long and short forms together; [[ss]] is the
-    -- long form and [[s]] is the short form.
-    -- <definition of function [[set_name]]>=
-    local function set_name(start, lim, long, short)
-      if start < lim then
-        -- string concatenation is quadratic, but names are short
-        -- An abbreviated token is the first letter of a token,
-        -- except again we have to deal with the damned specials.
-        -- <definition of [[abbrev]], for shortening a token>=
-        local function abbrev(token)
-          local first_alpha, _, alpha = string.find(token, '(%a)')
-          local first_brace           = string.find(token, '%{%\\')
-          if first_alpha and first_alpha <= (first_brace or first_alpha) then
-            return alpha
-          elseif first_brace then
-            local i, j, special = string.find(token, '(%b{})', first_brace)
-            if i then
-              return special
-            else -- unbalanced braces
-              return string.sub(token, first_brace)
+        for _, engine in pairs(engines) do
+            local citation = engine.citation(key, options)
+            if citation ~= nil then
+                if type(citation) == "string" then
+                    citation = SILE.texlikeToAST(citation)
+                end
+                if type(citation) ~= "table" then
+                    SU.error("Invalid citation produced for '"..key.."': "..tostring(citation), "bug")
+                end
+                return citation
             end
-          else
-            return ''
-          end
         end
-        local ss = tokens[start]
-        local s  = abbrev(tokens[start])
-        for i = start + 1, lim - 1 do
-          if inter_token then
-            ss = ss .. inter_token .. tokens[i]
-            s  = s  .. inter_token .. abbrev(tokens[i])
-          else
-            local ssep, nnext = trailers[i-1], tokens[i]
-            local sep,  next  = ssep,          abbrev(nnext)
-            -- Here is the default for a character between tokens:
-            -- a tie is the default space character between the last
-            -- two tokens of the name part, and between the first two
-            -- tokens if the first token is short enough; otherwise,
-            -- a space is the default.
-            -- <possibly adjust [[sep]] and [[ssep]] according to token position and size>=
-            if string.find(sep, sep_char) then
-              -- do nothing; sep is OK
-            elseif i == lim-1 then
-              sep, ssep = '~', '~'
-            elseif i == start + 1 then
-              sep  = text_char_count(s)  < 3 and '~' or ' '
-              ssep = text_char_count(ss) < 3 and '~' or ' '
-            else
-              sep, ssep = ' ', ' '
+
+        SU.error("Can't cite '"..key.."', not in any bibliography")
+    end,
+
+    --- Given citation key and citing options, produce an AST
+    --- which can be typeset to get a bibliography entry
+    produceBibliography = function(engines, key, options)
+        if #engines == 0 then
+            SU.error("Can't create bibliography for '"..key.."', no engines loaded")
+        end
+        for _, engine in pairs(engines) do
+            local citation, sortKey = engine.bibliography(key, options)
+            if citation ~= nil then
+                if type(citation) == "string" then
+                    citation = SILE.texlikeToAST(citation)
+                end
+                if type(citation) ~= "table" then
+                    SU.error("Invalid citation produced for '"..key.."': "..tostring(citation), "bug")
+                end
+                return citation, sortKey
             end
-            ss = ss ..        ssep .. nnext
-            s  = s  .. '.' .. sep  .. next
-          end
         end
-        name[long] = ss
-        name[short] = s
-      end
-    end
-    set_name(first_start, first_lim, 'ff', 'f')
-    set_name(von_start,   von_lim,   'vv', 'v')
-    set_name(von_lim,     last_lim,  'll', 'l')
-    set_name(last_lim,    jr_lim,    'jj', 'j')
-    return name
-  end
-end
 
---- Thanks, Norman, for the above functions!
-
-Bibliography = { -- This is big enough to have its own global var
-  CitationStyles = {
-    AuthorYear = function(_ENV)
-      return andSurnames(3), " ", year, optional(", ", cite.page)
-    end
-  },
-
-  produceCitation = function (cite, bib, style)
-    local item = bib[cite.key]
-    if not item then
-      return Bibliography.Errors.UNKNOWN_REFERENCE
-    end
-    local t = Bibliography.buildEnv(cite, item.attributes, style)
-    local func = setfenv and setfenv(style.CitationStyle, t) or style.CitationStyle
-    return Bibliography._process(item.attributes, {func(t)})
-  end,
-
-  produceReference = function (cite, bib, style)
-    local item = bib[cite.key]
-    if not item then
-      return Bibliography.Errors.UNKNOWN_REFERENCE
-    end
-    item.type =  (item.type:gsub("^%l", string.upper))
-    if not style[item.type] then
-      return Bibliography.Errors.UNKNOWN_TYPE
-    end
-
-    local t = Bibliography.buildEnv(cite, item.attributes, style)
-    local func = setfenv and setfenv(style[item.type], t) or style[item.type]
-    return Bibliography._process(item.attributes, {func(t)})
-  end,
-
-  buildEnv = function (cite,item, style)
-    local t = std.table.clone(getfenv and getfenv(1) or _ENV)
-    t.cite = cite
-    t.item = item
-    for k,v in pairs(item) do t[k:lower()] = v end
-    return std.table.merge(t, style)
-  end,
-
-  _process = function (item, t, dStart, dEnd)
-    for i = 1,#t do
-      if type(t[i]) == "function" then
-        t[i] = t[i](item)
-      end
-    end
-    local res = SU.concat(t,"")
-    if dStart or dEnd then
-      if res ~= "" then return (dStart .. res .. dEnd) end
-    else
-      return res
-    end
-  end,
-
-  Errors = {
-    UNKNOWN_REFERENCE = 1,
-  },
-
-  Style = std.object {
-    andAuthors = function(item)
-      local authors = namesplit(item.Author)
-      if #authors == 1 then
-        return parse_name(authors[1]).ll
-      else
-        for i = 1,#authors do
-          local author = parse_name(authors[i])
-          authors[i] = author.ll.. ", "..author.f.."."
-        end
-        return table.concat(authors, " and ")
-      end
+        SU.error("Can't create bibliography for '"..key.."', not in any bibliography engine")
     end,
-
-    andSurnames = function (max)
-      return function(item)
-        local authors = namesplit(item.Author)
-        if #authors > max then
-          return parse_name(authors[1]).ll .. " et al."
-        else
-          for i = 1,#authors do authors[i] = parse_name(authors[i]).ll end
-          return Bibliography.Style.commafy(authors)
-        end
-      end
-    end,
-
-    transEditor = function(item)
-      local r = {}
-      if item.Editor then r[#r+1] = "Edited by "..item.Editor end
-      if item.Translator then r[#r+1] = "Translated by "..item.Translator end
-      if #r then return table.concat(r, ", ") end
-      return nil
-    end,
-    quotes = function (...)
-      local t = {...}
-      return function(item)
-        return Bibliography._process(item, t, "“", "”")
-      end
-    end,
-    italic = function (...)
-      local t = {...}
-      return function(item)
-        return Bibliography._process(item, t, "\\em{", "}")
-      end
-    end,
-    parens = function (...)
-      local t = {...}
-      return function(item)
-        return Bibliography._process(item, t, "(", ")")
-      end
-    end,
-    optional = function(...)
-      local t = {n=select('#', ...), ...}
-      return function(item)
-        for i = 1,t.n do
-          if type(t[i]) == "function" then t[i] = t[i](item) end
-          if not t[i] or t[i] == "" then return "" end
-        end
-        return table.concat(t, "")
-      end
-    end,
-
-    commafy = function (t, andword) -- also stolen from nbibtex
-      andword = andword or 'and'
-      if #t == 1 then
-        return t[1]
-      elseif #t == 2 then
-        return t[1] .. ' ' .. andword .. ' ' .. t[2]
-      else
-        local last = t[#t]
-        t[#t] = andword .. ' ' .. t[#t]
-        local answer = table.concat(t, ', ')
-        t[#t] = last
-        return answer
-      end
-    end
-  }
 }
+
+---------------------
+--- SILE Commands ---
+---------------------
+-- Public SILE API for the package
+-- Stores its configuration in SILE.scratch.bibliography:
+SILE.scratch.bibliography = {
+    -- Loaded engines
+    engines = {},
+    -- All citations that were made with \cite in this document
+    references = {
+    -- <key> = {
+    --      usedOrder = <order in which this was first used>,
+    --      referencePending = <whether this was cited since it was last used as a reference>
+    -- }
+    },
+    -- Amount of references in .references. Used for references[].usedOrder
+    referencesCount = 0
+}
+
+SILE.registerCommand("loadbibliography", function(options, content)
+    local engineName = content and SU.contentToString(content)
+    local engine = Bibliography.createEngine(engineName, options)
+
+    local biby = SILE.scratch.bibliography
+    biby.engines[#biby.engines + 1] = engine
+end, "\\loadbibliography[engineOptions]{engineName}")
+
+SILE.registerCommand("cite", function(options, content)
+    local key = options.key or SU.contentToString(content)
+    local biby = SILE.scratch.bibliography
+
+    local reference = biby.references[key]
+    local usedOrder
+    if reference == nil then
+        usedOrder = biby.referencesCount + 1
+        reference = { usedOrder = usedOrder }
+        biby.references[key] = reference
+        biby.referencesCount = usedOrder
+    else
+        usedOrder = reference.usedOrder
+    end
+
+    options.usedOrder = options.usedOrder or reference.usedOrder
+
+    local citation = Bibliography.produceCitation(biby.engines, key, options)
+    SILE.process(citation)
+end)
+
+SILE.registerCommand("reference", function(options, content)
+    local key = options.key or SU.contentToString(content)
+    local biby = SILE.scratch.bibliography
+
+    local bibliography = Bibliography.produceBibliography(biby.engines, key, options)
+    SILE.call("raggedright", {}, function()
+        SILE.process(bibliography)
+    end)
+end)
+
+SILE.registerCommand("references", function(options, _)
+    local biby = SILE.scratch.bibliography
+
+    local entries = {}
+    for k, v in pairs(biby.references) do
+        local ast, sortKey = Bibliography.produceBibliography(biby.engines, k, options)
+        entries[v.usedOrder] = { key = k, ast = ast, sortKey = { sortKey, v.usedOrder } }
+    end
+
+    -- Sorting by sortKey and usedOrder to get a stable sort
+    table.sort(entries, function (a, b)
+        local aK = a.sortKey
+        local bK = b.sortKey
+        for i = 1, #aK do
+            if aK[i] ~= bK[i] then
+                if aK[i] == nil then
+                    return true
+                end
+                if aK[i] < bK[i] then
+                    return true
+                end
+            end
+        end
+        return false
+    end)
+
+
+    SILE.settings.temporarily(function ()
+        SILE.settings.set("document.lskip", SILE.nodefactory.newGlue({width = SILE.length.parse("1.8em")}))
+        local indentGlue = SILE.nodefactory.newGlue({width = SILE.length.parse("-1.8em")})
+        SILE.settings.set("current.parindent", indentGlue)
+        SILE.settings.set("document.parindent", indentGlue)
+        for _, entry in pairs(entries) do
+            SILE.process(entry.ast)
+            SILE.typesetter:endline()
+        end
+    end)
+end)
+
+
+---------------------
+--- Documentation ---
+---------------------
+return { documentation = [[\begin{document}
+The \code{bibliography} package creates citations and references (bibliographic citations).
+
+\code{\\loadbibliography[file=bibliography.bib]} loads a BibTex bibliography file.
+You can also supply the file content inline, but ensure that the content is properly escaped and does not contain any SILE commands.
+
+\code{\\bibstyle[citation=AuthorYear, reference=chicago]} specifies a style to use for citations and references.
+Available styles for citations are: \code{AuthorYear}.
+Available styles for references are: \code{chicago}, \code{iso690}.
+
+\code{\\cite{knuth}} inserts a citation, its content references a key from a loaded \code{.bib} entry.
+Citation is styled according to the active citation style. Additional options can be passed, if the citation style
+supports it, such as \code{page}.
+
+\code{\\reference{knuth}} inserts a reference (bibliographic citation), styled according to the active reference style.
+\end{document}]] }
