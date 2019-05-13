@@ -28,14 +28,14 @@ SILE.registerCommand("href", function (options, content)
     SILE.call("pdf:link", { dest = options.src, external = true }, content)
   else
     options.src = content[1]
-    local breakpat = options.breakpat or "/"
+    local breakpat = options.breakpat or "[/_-]"
     content = inputfilter.transformContent(content, urlFilter, breakpat)
     SILE.call("pdf:link", { dest = options.src }, content)
   end
 end)
 
 SILE.registerCommand("url", function (options, content)
-  local breakpat = options.breakpat or "/"
+  local breakpat = options.breakpat or "[/_-]"
   local result = inputfilter.transformContent(content, urlFilter, breakpat)
   SILE.call("code", {}, result)
 end)
