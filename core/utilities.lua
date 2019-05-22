@@ -221,7 +221,7 @@ end
 -- Strip the top level command off a content object and keep only the child
 -- items — assuming that the current command is taking care of itself
 utilities.subContent = function (content)
-  out = { id="stuff" }
+  local out = {}
   for key, val in pairs(content) do
     if type(key) == "number" then
       out[#out+1] = val

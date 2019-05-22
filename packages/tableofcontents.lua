@@ -27,22 +27,26 @@ local writeToc = function ()
 end
 
 SILE.registerCommand("tableofcontents", function (options, content)
+  local kindSuffix = options.kind and ":"..options.kind or ""
+
   local tocfile,_ = io.open(SILE.masterFilename .. '.toc')
   if not tocfile then
-    SILE.call("tableofcontents:notocmessage")
+    SILE.call({"tableofcontents:notocmessage"..kindSuffix, "tableofcontents:notocmessage"})
     return
   end
   local doc = tocfile:read("*all")
   local toc = assert(loadstring(doc))()
-  SILE.call("tableofcontents:header")
+  SILE.call({"tableofcontents:header"..kindSuffix, "tableofcontents:header"})
   for i = 1, #toc do
     local item = toc[i]
-    SILE.call("tableofcontents:item", {
-      level = item.level,
-      pageno = item.pageno
-    }, item.label)
+    if item.kind == options.kind then
+      SILE.call({"tableofcontents:item"..kindSuffix, "tableofcontents:item"}, {
+        level = item.level,
+        pageno = item.pageno
+      }, item.label)
+    end
   end
-  SILE.call("tableofcontents:footer")
+  SILE.call({"tableofcontents:footer"..kindSuffix, "tableofcontents:footer"})
 end)
 
 SILE.registerCommand("tableofcontents:item", function (options, content)
@@ -61,7 +65,8 @@ SILE.registerCommand("tocentry", function (options, content)
     category = "toc",
     value = {
       label = content,
-      level = (options.level or 1)
+      level = (options.level or 1),
+      kind = options.kind
     }
   })
 end)

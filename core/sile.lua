@@ -253,11 +253,23 @@ function SILE.call(cmd, options, content)
   elseif type(content) == "table" then
     file, line, column = content.file, content.line, content.col
   end
-  local pId = SILE.traceStack:pushCommand(cmd, line, column, options, file)
-  if not SILE.Commands[cmd] then SU.error("Unknown command "..cmd) end
-  local result = SILE.Commands[cmd](options or {}, content or {})
-  SILE.traceStack:pop(pId)
-  return result
+
+  if type(cmd) == "string" then
+    cmd = {cmd}
+  end
+
+  for cmdI = 1,#cmd do
+    local commandName = cmd[cmdI]
+    local command = SILE.Commands[commandName]
+    if command then
+      local pId = SILE.traceStack:pushCommand(commandName, line, column, options, file)
+      local result = command(options or {}, content or {})
+      SILE.traceStack:pop(pId)
+      return result
+    end
+  end
+
+  SU.error("Unknown command "..SU.concat(cmd, ", "))
 end
 
 return SILE
